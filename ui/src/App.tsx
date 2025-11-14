@@ -791,51 +791,64 @@ function WalletPage() {
 
 function ScannerPage() {
     const [secret, setSecret] = useState('');
+    const [issuedAt, setIssuedAt] = useState<number | undefined>(undefined);
     const [nullifier, setNullifier] = useState('');
     const [onchain, setOnchain] = useState<OnchainState | null>(null);
     const [msg, setMsg] = useState<string | null>(null); const [err, setErr] = useState<string | null>(null);
     const { success, error } = useToast();
     async function refresh() { try { setOnchain(await getState()); } catch (e: any) { setErr(e.message); } }
     useEffect(() => { refresh(); }, []);
-    useEffect(() => { if (msg) { success(msg); } }, [msg, success]);
-    useEffect(() => { if (err) { error(err); } }, [err, error]);
-    // Auto-load from URL hash/query: #ticket=<payload> or ?ticket=<payload>
+    useEffect(() => { if (msg) success(msg); }, [msg, success]);
+    useEffect(() => { if (err) error(err); }, [err, error]);
+    // Parse QR payload from hash or query
     useEffect(() => {
         try {
             const url = new URL(window.location.href);
             let payload: string | null = null;
-            if (url.hash && url.hash.startsWith('#ticket=')) {
-                payload = decodeURIComponent(url.hash.slice('#ticket='.length));
-            }
-            if (!payload) {
-                const q = url.searchParams.get('ticket');
-                if (q) payload = q;
-            }
+            if (url.hash.startsWith('#ticket=')) payload = decodeURIComponent(url.hash.slice('#ticket='.length));
+            if (!payload) payload = url.searchParams.get('ticket');
             if (payload && payload.startsWith('midnight-ticket:v1:')) {
                 const parts = payload.split(':');
                 if (parts.length >= 5) {
                     const s = parts[2];
+                    const iat = Number(parts[3]);
                     setSecret(s);
+                    if (isFinite(iat)) setIssuedAt(iat);
                     sha256Hex(`nullifier:${s}`).then(n => setNullifier(n));
                     setMsg('Loaded ticket from QR link');
                 }
             }
         } catch { /* ignore */ }
     }, []);
-    async function useSecret() {
+    async function derive() {
         try {
             if (!secret) { setErr('Enter secret'); return; }
             const n = await sha256Hex(`nullifier:${secret}`);
-            setNullifier(n);
-            setMsg('Derived nullifier from secret');
+            setNullifier(n); setMsg('Derived nullifier from secret');
         } catch (e: any) { setErr(e.message); }
     }
     async function record() {
         try {
-            const res = await fetch('/api/record-nullifier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nullifier }) });
-            const json = await res.json();
-            if (!json.ok) { setErr(json.reason || 'fail'); return; }
-            setOnchain(json.onchain); setMsg('Nullifier recorded');
+            if (!secret || !issuedAt) { setErr('Scan the QR first; issuedAt missing'); return; }
+            // Always ask the server to validate and derive nullifier; never send a raw nullifier
+            const resp = await fetch('/api/record-nullifier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret, issuedAt }) });
+            let json: any = null;
+            try { json = await resp.json(); } catch { /* ignore */ }
+            if (!resp.ok || !json?.ok) {
+                const reason = String(json?.reason || 'record failed');
+                // If server is outdated and asks for nullifier, surface a clear message
+                if (/missing\s*nullifier|provide\s*nullifier/i.test(reason)) {
+                    setErr('Server requires a precomputed nullifier (insecure). Please update the backend to the hardened version.');
+                } else if (/not\s*found/i.test(reason)) {
+                    setErr('Invalid secret or issuedAt (not found).');
+                } else {
+                    setErr(reason);
+                }
+                return;
+            }
+            setOnchain(json.onchain);
+            setNullifier(json.nullifier || '');
+            setMsg('Nullifier recorded');
         } catch (e: any) { setErr(e.message); }
     }
     return (
@@ -844,11 +857,23 @@ function ScannerPage() {
             {err && <div style={{ color: 'red' }}>{err}</div>}
             {msg && <div style={{ color: 'green' }}>{msg}</div>}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <input style={{ width: '40%' }} placeholder="secret (optional)" value={secret} onChange={e => setSecret(e.target.value)} />
-                <button className="btn-primary" onClick={useSecret}>Use secret → nullifier</button>
-                <input style={{ width: '40%' }} placeholder="nullifier" value={nullifier} onChange={e => setNullifier(e.target.value)} />
+                <input style={{ width: '35%' }} placeholder="secret (from QR)" value={secret} onChange={e => setSecret(e.target.value)} />
+                <input
+                    style={{ width: '25%' }}
+                    placeholder="issuedAt (ms)"
+                    value={issuedAt ?? ''}
+                    onChange={e => {
+                        const v = e.target.value.trim();
+                        if (!v) { setIssuedAt(undefined); return; }
+                        const num = Number(v);
+                        if (isFinite(num)) setIssuedAt(num);
+                    }}
+                />
+                <button className="btn-primary" onClick={derive}>Use secret → nullifier</button>
+                <input style={{ width: '30%' }} placeholder="nullifier (auto)" value={nullifier} readOnly />
                 <button className="btn-primary" onClick={record}>Record Nullifier</button>
             </div>
+            <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>For security, you must scan the ticket QR (contains issuedAt) before recording.</div>
             <p><Link to="/real/wallet">Back to Wallet</Link></p>
         </div>
     );

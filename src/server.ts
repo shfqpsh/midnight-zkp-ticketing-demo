@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { TicketSystem, verifyRedemption, nullifierFromSecret } from "./tickets/state.js";
-import { MerkleTree, Hash } from "./lib/merkle.js";
+import { MerkleTree, Hash, leafFromTicket } from "./lib/merkle.js";
 import { WalletBuilder } from "@midnight-ntwrk/wallet";
 import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-public-data-provider";
 import { NetworkId, setNetworkId, getZswapNetworkId, getLedgerNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
@@ -179,6 +179,30 @@ app.post("/api/redeem", (req: Request, res: Response) => {
     res.json({ ok: true, nullifier: attempt.nullifier, onchain });
 });
 
+// Redemption for realistic flow: validate by computing leaf from secret+issuedAt
+// and checking membership in issuer's leaves set. Records nullifier only if valid and unexpired.
+app.post("/api/redeem-leaf", (req: Request, res: Response) => {
+    const { secret, issuedAt } = req.body as { secret: string; issuedAt: number };
+    if (!secret || !issuedAt) return res.status(400).json({ ok: false, reason: "Missing secret or issuedAt" });
+    const issuer = readIssuerTree();
+    if (!issuer) return res.status(400).json({ ok: false, reason: "Not initialized" });
+    const onchain = readOnchain();
+    // Expiry check
+    const now = Date.now();
+    if (onchain.maxAgeMs && (now > (Number(issuedAt) + Number(onchain.maxAgeMs)))) {
+        return res.status(400).json({ ok: false, reason: "Ticket expired" });
+    }
+    const leaf = leafFromTicket(secret, Number(issuedAt));
+    const idx = issuer.leaves.indexOf(leaf);
+    if (idx < 0) return res.status(404).json({ ok: false, reason: "Ticket not found" });
+    const n = nullifierFromSecret(secret);
+    onchain.nullifiers = onchain.nullifiers || [];
+    if (onchain.nullifiers.includes(n)) return res.status(400).json({ ok: false, reason: "Already used" });
+    onchain.nullifiers.push(n);
+    writeOnchain(onchain);
+    return res.json({ ok: true, nullifier: n, onchain, index: idx });
+});
+
 // --- Realistic flow (issuer-only leaves, wallet issues via leaf) ---
 app.post("/api/issue-leaf", (req: Request, res: Response) => {
     const { leaf } = req.body as { leaf: Hash };
@@ -205,17 +229,46 @@ app.post("/api/issue-leaf", (req: Request, res: Response) => {
     res.json({ index: leaves.length - 1, onchain });
 });
 
+// Hardened nullifier recording: require secret + issuedAt so we can validate membership
+// in issuer tree (realistic flow) or local TicketSystem (legacy demo).
 app.post("/api/record-nullifier", (req: Request, res: Response) => {
-    const { nullifier } = req.body as { nullifier: Hash };
-    if (!nullifier) return res.status(400).json({ ok: false, reason: "Missing nullifier" });
+    const { secret, issuedAt } = req.body as { secret?: string; issuedAt?: number; nullifier?: string };
+    // Explicitly reject clients that try to send a precomputed nullifier.
+    // The server must derive the nullifier from the secret to prevent arbitrary inserts.
+    if ((req.body as any).nullifier) {
+        return res.status(400).json({ ok: false, reason: "Do not send nullifier; server derives it" });
+    }
+    if (!secret || !issuedAt) return res.status(400).json({ ok: false, reason: "Missing secret or issuedAt" });
     const onchain = readOnchain();
+    // Expiry check if initialized
+    if (onchain.maxAgeMs && Date.now() > issuedAt + onchain.maxAgeMs) {
+        return res.status(400).json({ ok: false, reason: "Ticket expired" });
+    }
+    // Determine validation source
+    let valid = false;
+    let index: number | undefined = undefined;
+    const issuer = readIssuerTree();
+    if (issuer) {
+        const leaf = leafFromTicket(secret, issuedAt);
+        index = issuer.leaves.indexOf(leaf);
+        if (index >= 0) valid = true;
+    } else {
+        // Legacy demo: fall back to local TicketSystem records
+        const system = TicketSystem.fromLocal();
+        if (system) {
+            const rec = system.getRecords().find(r => r.secret === secret && r.issuedAt === issuedAt);
+            if (rec) { valid = true; index = rec.index; }
+        }
+    }
+    if (!valid) return res.status(404).json({ ok: false, reason: "Ticket not found" });
+    const nullifier = nullifierFromSecret(secret);
     onchain.nullifiers = onchain.nullifiers || [];
     if (onchain.nullifiers.includes(nullifier)) {
         return res.status(400).json({ ok: false, reason: "Already used" });
     }
     onchain.nullifiers.push(nullifier);
     writeOnchain(onchain);
-    res.json({ ok: true, onchain });
+    res.json({ ok: true, nullifier, onchain, index });
 });
 
 // Paid issuance: verify txId has not been used and accept leaf (demo-level verification)

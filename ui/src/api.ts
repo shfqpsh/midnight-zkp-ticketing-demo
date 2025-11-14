@@ -51,6 +51,17 @@ export async function redeemTicket(secret: string, issuedAt: number): Promise<{ 
     return { ok: false, reason: 'Malformed server response' };
 }
 
+export async function redeemLeaf(secret: string, issuedAt: number): Promise<{ ok: true; nullifier: string; onchain: OnchainState } | { ok: false; reason: string }> {
+    const res = await fetch(`${base}/api/redeem-leaf`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret, issuedAt }) });
+    const ct = res.headers.get('content-type') || '';
+    let body: any = null;
+    if (ct.includes('application/json')) body = await res.json();
+    else body = { ok: false, reason: `Non-JSON response (${res.status})` };
+    if (!res.ok) return { ok: false, reason: body?.reason || `HTTP ${res.status}` };
+    if (body && body.ok === true) return body;
+    return { ok: false, reason: 'Malformed server response' };
+}
+
 export async function resetAll(): Promise<{ ok: true }> {
     const attempt = async (method: 'POST' | 'GET') => {
         const res = await fetch(`${base}/api/reset`, { method });
