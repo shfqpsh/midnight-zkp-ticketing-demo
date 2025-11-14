@@ -13,7 +13,8 @@ export default defineConfig({
         }
     },
     build: {
-        outDir: path.resolve(__dirname, 'ui-dist'),
+        // Output inside the UI root (ui/dist) so Apache DocumentRoot /var/www/midnight-tickets/ui/dist works
+        outDir: 'dist',
         emptyOutDir: true
     },
     optimizeDeps: {
