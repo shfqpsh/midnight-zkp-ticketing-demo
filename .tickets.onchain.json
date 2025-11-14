@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "root": "0x1c2a1ceebc05cc3bc3d3a731f8ed451aa9e1486c1b0a14c2ad784fc789373893",
+  "maxAgeMs": 86400000,
+  "nullifiers": [],
+  "leafCount": 7,
+  "depth": 16
+}
