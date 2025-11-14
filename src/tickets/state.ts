@@ -1,5 +1,6 @@
 import { MerkleTree, leafFromTicket, nullifierFromSecret, Hash } from "../lib/merkle.js";
 import fs from "fs";
+import path from "path";
 
 export interface TicketRecord {
     secret: string; // randomly generated per ticket
@@ -20,7 +21,8 @@ export interface LocalTicketState {
     maxAgeMs: number;
 }
 
-const LOCAL_STATE_FILE = ".tickets.local.json";
+const DATA_DIR = process.env.TICKETS_DATA_DIR || process.cwd();
+const LOCAL_STATE_FILE = path.join(DATA_DIR, ".tickets.local.json");
 
 export class TicketSystem {
     private tree: MerkleTree;
@@ -78,6 +80,7 @@ export class TicketSystem {
             tickets: this.records,
             maxAgeMs: this.maxAgeMs
         };
+        try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch { /* ignore */ }
         fs.writeFileSync(LOCAL_STATE_FILE, JSON.stringify(data, null, 2));
     }
 }

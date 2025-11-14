@@ -185,6 +185,25 @@ import { sha256Hex } from './crypto';
 import { detectWallet } from './wallet';
 import TicketQr from './components/TicketQr';
 
+// Helper to generate a 32-hex secret that works on HTTP (IP) too
+function generateSecretHex(): string {
+    try {
+        const g: any = (globalThis as any).crypto;
+        if (g && typeof g.randomUUID === 'function') {
+            return g.randomUUID().replace(/-/g, ''); // 32 hex chars
+        }
+        if (g && typeof g.getRandomValues === 'function') {
+            const bytes = new Uint8Array(16); // 16 bytes -> 32 hex chars
+            g.getRandomValues(bytes);
+            return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+    } catch { /* ignore and fall back */ }
+    // Last resort (non-crypto) fallback
+    let out = '';
+    for (let i = 0; i < 32; i++) out += Math.floor(Math.random() * 16).toString(16);
+    return out;
+}
+
 function IssuerPage() {
     const [hours, setHours] = useState(24); const [depth, setDepth] = useState(16); const [state, setState] = useState<OnchainState | null>(null);
     const [msg, setMsg] = useState<string | null>(null); const [err, setErr] = useState<string | null>(null);
@@ -351,7 +370,7 @@ function WalletPage() {
     useEffect(() => { refresh(); }, []);
     useEffect(() => { if (msg) { success(msg); } }, [msg, success]);
     useEffect(() => { if (err) { error(err); } }, [err, error]);
-    function gen() { const s = crypto.randomUUID().replace(/-/g, ''); setSecret(s); setIssuedAt(Date.now()); }
+    function gen() { const s = generateSecretHex(); setSecret(s); setIssuedAt(Date.now()); }
     // Client-side guard to prevent re-issuing the same leaf from this browser
     const [leafHex, setLeafHex] = useState<string>('');
     const [leafAlreadyIssued, setLeafAlreadyIssued] = useState<boolean>(false);
@@ -411,7 +430,7 @@ function WalletPage() {
         let useIssuedAt = issuedAt;
         // Auto-generate if missing when oneStep flow is enabled
         if ((!useSecret || !useIssuedAt) && oneStep) {
-            useSecret = crypto.randomUUID().replace(/-/g, '');
+            useSecret = generateSecretHex();
             useIssuedAt = Date.now();
             setSecret(useSecret); setIssuedAt(useIssuedAt);
         }
@@ -609,7 +628,7 @@ function WalletPage() {
                             // Auto-generate secret if user hasn't clicked Generate
                             let useSecret = secret; let useIssuedAt = issuedAt;
                             if (!useSecret || !useIssuedAt) {
-                                useSecret = crypto.randomUUID().replace(/-/g, '');
+                                useSecret = generateSecretHex();
                                 useIssuedAt = Date.now();
                                 setSecret(useSecret);
                                 setIssuedAt(useIssuedAt);

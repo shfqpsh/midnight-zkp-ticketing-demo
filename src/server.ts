@@ -28,9 +28,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const ONCHAIN_FILE = ".tickets.onchain.json";
-const ISSUER_FILE = ".issuer.tree.json"; // for realistic flow: issuer stores only leaves
-const PAYMENTS_FILE = ".payments.json"; // track used txIds to prevent reuse in demo
+const DATA_DIR = process.env.TICKETS_DATA_DIR || process.cwd();
+try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch { /* ignore */ }
+const ONCHAIN_FILE = path.join(DATA_DIR, ".tickets.onchain.json");
+const ISSUER_FILE = path.join(DATA_DIR, ".issuer.tree.json"); // for realistic flow: issuer stores only leaves
+const PAYMENTS_FILE = path.join(DATA_DIR, ".payments.json"); // track used txIds to prevent reuse in demo
 
 function readOnchain() {
     if (!fs.existsSync(ONCHAIN_FILE)) return { version: 1, root: "", maxAgeMs: 0, nullifiers: [], leafCount: 0, depth: 16 };
@@ -130,9 +132,12 @@ app.post("/api/init", (req: Request, res: Response) => {
 // Reset all local demo state (issued tickets, issuer leaves, onchain JSON)
 const doReset = (_req: Request, res: Response) => {
     try {
-        if (fs.existsSync('.tickets.local.json')) fs.unlinkSync('.tickets.local.json');
-        if (fs.existsSync('.tickets.onchain.json')) fs.unlinkSync('.tickets.onchain.json');
-        if (fs.existsSync('.issuer.tree.json')) fs.unlinkSync('.issuer.tree.json');
+        const localPath = path.join(DATA_DIR, '.tickets.local.json');
+        const onchainPath = path.join(DATA_DIR, '.tickets.onchain.json');
+        const issuerPath = path.join(DATA_DIR, '.issuer.tree.json');
+        if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
+        if (fs.existsSync(onchainPath)) fs.unlinkSync(onchainPath);
+        if (fs.existsSync(issuerPath)) fs.unlinkSync(issuerPath);
     } catch { }
     res.json({ ok: true });
 };
