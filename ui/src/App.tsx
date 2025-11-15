@@ -236,6 +236,11 @@ function IssuerPage() {
             <h2>Issuer</h2>
             {err && <div style={{ color: 'red' }}>{err}</div>}
             {msg && <div style={{ color: 'green' }}>{msg}</div>}
+            {remaining === 0 && (
+                <div className="callout" style={{ borderColor: '#ef4444', marginTop: 8, marginBottom: 12 }}>
+                    the Merkle tree is full (All Tickets are sold)
+                </div>
+            )}
             <div style={{ marginBottom: 12 }}>
                 <button className="btn-danger" onClick={async () => { try { await resetAll(); await refresh(); setMsg('Reset complete'); } catch (e: any) { setErr(e.message || 'reset failed'); } }}>Reset (clear issued tickets)</button>
             </div>
@@ -442,7 +447,18 @@ function WalletPage() {
             const ct = res.headers.get('content-type') || '';
             if (!ct.includes('application/json')) { const text = await res.text(); throw new Error(`Non-JSON response: ${text.slice(0, 100)}`); }
             const json = await res.json();
-            if (!res.ok) { setErr(json.reason || json.error || 'issue failed'); return; }
+            if (!res.ok) {
+                const reason: string = json.reason || json.error || 'issue failed';
+                // If Merkle is full, surface the requested phrasing and avoid keeping a fresh secret around
+                if (/full/i.test(reason)) {
+                    setErr('The Merkle tree is full (All tickets are sold!)');
+                    // Clear any transient index; keep prior successful ticket intact
+                    setIndex(undefined);
+                } else {
+                    setErr(reason);
+                }
+                return;
+            }
             setIndex(json.index); setOnchain(json.onchain); setMsg('Leaf issued (store secret privately)');
             try {
                 const key = 'issued:leaves';
@@ -513,11 +529,20 @@ function WalletPage() {
             setMsg(`Connected ${name} – payments remain Midnight by default`);
         } catch (e: any) { setErr(e?.message || 'connect failed'); }
     }
+    // Derive capacity/remaining to disable purchase proactively when sold out
+    const cap = onchain ? (1 << Number(onchain.depth)) : undefined;
+    const remaining = cap != null ? Math.max(cap - (onchain?.leafCount ?? 0), 0) : undefined;
+    const soldOut = remaining != null ? remaining <= 0 : false;
     return (
         <div className="container">
             <h2>Wallet</h2>
             {err && <div style={{ color: 'red' }}>{err}</div>}
             {msg && <div style={{ color: 'green' }}>{msg}</div>}
+            {soldOut && (
+                <div className="callout" style={{ borderColor: '#ef4444', marginTop: 8, marginBottom: 12 }}>
+                    the Merkle tree is full (All Tickets are sold)
+                </div>
+            )}
             {!walletReady && (
                 <div className="card" style={{ marginTop: 8 }}>
                     <div className="section-title">Step 1 — Connect your wallet</div>
@@ -552,8 +577,8 @@ function WalletPage() {
                             </button>
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            {!oneStep && <button className="btn-primary" onClick={gen}>Generate Ticket</button>}
-                            <button onClick={issue} disabled={leafAlreadyIssued}>{oneStep ? 'Get Ticket' : 'Buy Ticket'}</button>
+                            {!oneStep && <button className="btn-primary" onClick={gen} disabled={soldOut}>Generate Ticket</button>}
+                            <button onClick={issue} disabled={leafAlreadyIssued || soldOut}>{soldOut ? 'the Merkle tree is full (All Tickets are sold)' : (oneStep ? 'Get Ticket' : 'Buy Ticket')}</button>
                         </div>
                         {oneStep ? (
                             <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
@@ -565,14 +590,30 @@ function WalletPage() {
                             </div>
                         )}
                         <div style={{ marginTop: 12 }}>
-                            <strong>Secret:</strong> <code className="mono">{secret || '—'}</code><br />
-                            <strong>IssuedAt:</strong> {issuedAt || '—'}<br />
+                            {/**
+                             * Show generated details in Advanced mode even before issuance,
+                             * but continue to gate QR on successful issuance (index != null).
+                             */}
+                            <strong>Secret:</strong> <code className="mono">{(!oneStep && secret) ? secret : (index != null ? (secret || '—') : '—')}</code><br />
+                            <strong>IssuedAt:</strong> {(!oneStep && issuedAt) ? issuedAt : (index != null ? (issuedAt || '—') : '—')}<br />
                             <strong>Index:</strong> {index ?? '—'}
                             {leafAlreadyIssued && (
                                 <div className="pill" style={{ marginTop: 6 }}>Leaf already issued</div>
                             )}
                             <div style={{ marginTop: 12 }}>
-                                <TicketQr secret={secret} issuedAt={issuedAt} index={index} walletAddress={walletAddr} onSaved={(r) => setMsg(`Ticket saved locally for wallet (index ${r.index}).`)} />
+                                {index != null ? (
+                                    <TicketQr
+                                        secret={secret}
+                                        issuedAt={issuedAt}
+                                        index={index}
+                                        walletAddress={walletAddr}
+                                        onSaved={(r) => setMsg(`Ticket saved locally for wallet (index ${r.index}).`)}
+                                    />
+                                ) : (
+                                    <div className="muted" style={{ fontSize: 12 }}>
+                                        {soldOut ? 'The Merkle tree is full (All tickets are sold!)' : 'QR will appear after your ticket is issued successfully.'}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -623,7 +664,7 @@ function WalletPage() {
                                 }
                             } catch (e: any) { setErr(e.message || 'connect failed'); }
                         }}>Connect Wallet</button>
-                        <button className="btn-primary" disabled={!walletReady || autoPayBusy} onClick={async () => {
+                        <button className="btn-primary" disabled={!walletReady || autoPayBusy || soldOut} onClick={async () => {
                             setErr(null); setMsg(null); setAutoPayBusy(true);
                             // Auto-generate secret if user hasn't clicked Generate
                             let useSecret = secret; let useIssuedAt = issuedAt;
@@ -654,7 +695,10 @@ function WalletPage() {
                                 const leaf = await sha256Hex(`${useSecret}:${useIssuedAt}`);
                                 const r = await fetch('/api/paid-issue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leaf, txId: newTxId }) });
                                 const j = await r.json();
-                                if (!j.ok) { setErr(j.reason || 'purchase failed'); }
+                                if (!j.ok) {
+                                    const rr = j.reason || 'purchase failed';
+                                    if (/full/i.test(String(rr))) setErr('the Merkle tree is full (All Tickets are sold)'); else setErr(rr);
+                                }
                                 else { setIndex(j.index); setOnchain(j.onchain); setMsg('Ticket purchased and issued'); }
                             } catch (e: any) {
                                 // If wallet does not expose a builder, guide manual send
@@ -666,17 +710,21 @@ function WalletPage() {
                                 }
                             }
                             finally { setAutoPayBusy(false); }
-                        }}>Buy Ticket with Wallet</button>
+                        }}>{soldOut ? 'The Merkle tree is full (All tickets are sold!)' : 'Buy Ticket with Wallet'}</button>
                     </div>
                     <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                         <input placeholder="txId" value={txId} onChange={e => setTxId(e.target.value)} style={{ flex: '1 1 320px' }} />
-                        <button className="btn-primary" onClick={async () => {
+                        <button className="btn-primary" disabled={soldOut} onClick={async () => {
                             if (!secret || !issuedAt) { setErr('Generate first'); return; }
                             try {
                                 const leaf = await sha256Hex(`${secret}:${issuedAt}`);
                                 const r = await fetch('/api/paid-issue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leaf, txId }) });
                                 const j = await r.json();
-                                if (!j.ok) { setErr(j.reason || 'paid issue failed'); return; }
+                                if (!j.ok) {
+                                    const rr = j.reason || 'paid issue failed';
+                                    setErr(/full/i.test(String(rr)) ? 'The Merkle tree is full (All tickets are sold!)' : rr);
+                                    return;
+                                }
                                 setIndex(j.index); setOnchain(j.onchain); setMsg('Paid issuance completed');
                             } catch (e: any) { setErr(e.message || 'paid issue failed'); }
                         }}>Record Payment (Paste txId)</button>

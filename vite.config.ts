@@ -3,13 +3,18 @@ import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import path from 'path';
 
+const apiPort = Number(process.env.API_PORT || '4001');
+
 export default defineConfig({
     root: path.resolve(__dirname, 'ui'),
     plugins: [wasm(), topLevelAwait()],
     server: {
         port: 5173,
         proxy: {
-            '/api': 'http://localhost:4001'
+            '/api': {
+                target: `http://localhost:${apiPort}`,
+                changeOrigin: true
+            }
         }
     },
     build: {

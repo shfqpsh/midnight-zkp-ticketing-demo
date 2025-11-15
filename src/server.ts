@@ -156,7 +156,7 @@ app.post("/api/issue", (_req: Request, res: Response) => {
         res.json({ ticket: rec, onchain });
     } catch (e: any) {
         if ((e?.message || "").includes("Merkle tree is full")) {
-            return res.status(409).json({ ok: false, reason: "Merkle tree is full" });
+            return res.status(409).json({ ok: false, reason: "Merkle tree is full (All Tickets are sold)" });
         }
         res.status(500).json({ ok: false, reason: e?.message || 'issue failed' });
     }
@@ -216,7 +216,7 @@ app.post("/api/issue-leaf", (req: Request, res: Response) => {
     // Enforce Merkle capacity
     const capacity = 1 << issuer.depth;
     if (issuer.leaves.length >= capacity) {
-        return res.status(409).json({ ok: false, reason: "Merkle tree is full" });
+        return res.status(409).json({ ok: false, reason: "Merkle tree is full (All Tickets are sold)" });
     }
     const leaves = issuer.leaves.slice();
     leaves.push(leaf);
@@ -285,7 +285,7 @@ app.post("/api/paid-issue", (req: Request, res: Response) => {
     // Enforce Merkle capacity
     const capacity = 1 << issuer.depth;
     if (issuer.leaves.length >= capacity) {
-        return res.status(409).json({ ok: false, reason: "Merkle tree is full" });
+        return res.status(409).json({ ok: false, reason: "Merkle tree is full (All Tickets are sold)" });
     }
     // Minimal replay protection: store used txIds
     const payments = readPayments();
