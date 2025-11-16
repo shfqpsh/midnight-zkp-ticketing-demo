@@ -59,8 +59,8 @@ npm run build
 npm run deploy   # deploy hello-world contract (stores blank state initially)
 npm run cli      # interactive menu
 # UI demo (local)
-npm run server   # terminal 1: start REST API on :4000
-npm run ui:dev   # terminal 2: start Vite on :5173 (proxied to :4000)
+npm run server   # terminal 1: start REST API (auto picks port; usually :4001)
+API_PORT=4001 npm run ui:dev   # terminal 2: start Vite on :5173 (proxy to API_PORT)
 ```
 
 Menu options:
@@ -95,9 +95,39 @@ Menu options:
 - Double redemption ⇒ nullifier found.
 - Invalid Merkle proof ⇒ rejected.
 - Tree full ⇒ issuance throws error.
+	- UI now shows: `the Merkle tree is full (All Tickets are sold)` and disables all issuance buttons (including Generate in Advanced mode).
 
 ## Security Notes
 Do not log or persist secrets in production beyond user custody. Use secure randomness (`crypto.randomBytes`). Consider rate limiting issuance & redemption to mitigate brute-force attempts.
 
 ## License
 Prototype / educational purposes.
+
+---
+## Hackathon / GitHub Migration Notes
+
+This project was originally pushed to a Bitbucket repository for early iteration. For hackathon submission requirements it has been mirrored to GitHub:
+
+GitHub Repository: https://github.com/shfqpsh/midnight-zkp-ticketing-demo
+
+### Migration Steps (executed)
+1. Added/updated `.gitignore` to exclude local demo state (`.tickets.local.json`, `.tickets.onchain.json`, `.issuer.tree.json`, `.payments.json`).
+2. Ensured build passes (`npm run build`).
+3. Normalized dev proxy via `API_PORT` env variable so the UI doesn’t hang if backend auto-increments port.
+4. Added sold‑out banner & button disablement across Wallet and Issuer pages for clarity.
+
+### Recommended Next GitHub Actions (optional)
+Create `.github/workflows/ci.yml` with a Node matrix (18.x, 20.x) to run `npm ci && npm run build` and (future) tests.
+
+### Safety Checklist Before Public Push
+- Remove any accidental seeds or private keys (ISSUER_SEED must remain an environment variable only).
+- Do NOT commit local LevelDB state or ticket JSON blobs (see updated `.gitignore`).
+
+### Suggested Push Commands
+```bash
+git remote rename origin bitbucket
+git remote add origin https://github.com/shfqpsh/midnight-zkp-ticketing-demo.git
+git push -u origin main --tags
+```
+
+---

@@ -40,7 +40,14 @@ tmp/
 
 # Midnight local state
 midnight-level-db/
+.issuer.tree.json
+.tickets.local.json
+.tickets.onchain.json
+.payments.json
 
 # Generated contract artifacts (keep keys checked-in explicitly if needed)
 contracts/**/compiler/
 contracts/managed/**/compiler/
+
+# Ignore local ticket demo JSON state backups if created elsewhere
+.tickets.*.json
