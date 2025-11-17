@@ -44,6 +44,7 @@ midnight-level-db/
 .tickets.local.json
 .tickets.onchain.json
 .payments.json
+.buyers.json
 
 # Generated contract artifacts (keep keys checked-in explicitly if needed)
 contracts/**/compiler/

@@ -207,8 +207,19 @@ function generateSecretHex(): string {
 function IssuerPage() {
     const [hours, setHours] = useState(24); const [depth, setDepth] = useState(16); const [state, setState] = useState<OnchainState | null>(null);
     const [msg, setMsg] = useState<string | null>(null); const [err, setErr] = useState<string | null>(null);
+    const [buyers, setBuyers] = useState<Array<{ name?: string; email?: string; index?: number; savedAt?: number }>>([]);
+    const [buyersOpen, setBuyersOpen] = useState(false);
     const { success, error } = useToast();
-    async function refresh() { try { setState(await getState()); } catch (e: any) { setErr(e.message); } }
+    async function refresh() {
+        try {
+            const [s, b] = await Promise.all([
+                getState(),
+                fetch('/api/buyers', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ ok: false }))
+            ]);
+            setState(s);
+            if (b && b.ok && Array.isArray(b.buyers)) setBuyers(b.buyers);
+        } catch (e: any) { setErr(e.message); }
+    }
     useEffect(() => { refresh(); }, []);
     // Auto-refresh overview every 3 seconds (pause when tab hidden)
     useEffect(() => {
@@ -242,7 +253,7 @@ function IssuerPage() {
                 </div>
             )}
             <div style={{ marginBottom: 12 }}>
-                <button className="btn-danger" onClick={async () => { try { await resetAll(); await refresh(); setMsg('Reset complete'); } catch (e: any) { setErr(e.message || 'reset failed'); } }}>Reset (clear issued tickets)</button>
+                <button className="btn-danger" onClick={async () => { try { await resetAll(); setBuyers([]); setBuyersOpen(false); await refresh(); setMsg('Reset complete'); } catch (e: any) { setErr(e.message || 'reset failed'); } }}>Reset (clear issued tickets)</button>
             </div>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -280,6 +291,10 @@ function IssuerPage() {
                         <div style={{ fontSize: 12, color: '#9aa1b1' }}>Sold so far</div>
                         <div style={{ fontSize: 20 }}>{sold}</div>
                         <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Total tickets already issued.</div>
+                        <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <button onClick={() => setBuyersOpen(true)} disabled={!buyers || buyers.length === 0}>View buyers</button>
+                            <span className="muted" style={{ fontSize: 11 }}>(consented only)</span>
+                        </div>
                     </div>
                     <div className="card" style={{ margin: 0 }}>
                         <div style={{ fontSize: 12, color: '#9aa1b1' }}>Remaining</div>
@@ -309,6 +324,47 @@ function IssuerPage() {
 
             <h4 style={{ marginTop: 24 }}>Nerd Friendly (raw on-chain state)</h4>
             <div className="card"><pre style={{ margin: 0 }}>{JSON.stringify(state, null, 2)}</pre></div>
+            {buyersOpen && (
+                <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Buyer info"
+                    onClick={() => setBuyersOpen(false)}
+                    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}
+                >
+                    <div className="card" style={{ width: 'min(900px, 96vw)', maxHeight: '85vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div className="section-title" style={{ marginBottom: 0 }}>Buyer info (consented only)</div>
+                            <button onClick={() => setBuyersOpen(false)}>Close</button>
+                        </div>
+                        <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>Names/emails shown here were shared voluntarily with consent and are not on-chain.</div>
+                        {(!buyers || buyers.length === 0) ? (
+                            <div>No buyer info yet</div>
+                        ) : (
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th style={{ textAlign: 'left' }}>Index</th>
+                                        <th style={{ textAlign: 'left' }}>Name</th>
+                                        <th style={{ textAlign: 'left' }}>Email</th>
+                                        <th style={{ textAlign: 'left' }}>Saved</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {buyers.map((b, i) => (
+                                        <tr key={`${b.index ?? i}-${b.savedAt ?? i}`}>
+                                            <td>{b.index ?? '—'}</td>
+                                            <td>{b.name || '—'}</td>
+                                            <td>{b.email || '—'}</td>
+                                            <td>{b.savedAt ? new Date(b.savedAt).toLocaleString() : '—'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+                    </div>
+                </div>
+            )}
             <p><Link to="/real/wallet">Go to Wallet</Link></p>
         </div>
     );
@@ -343,6 +399,10 @@ function WalletPage() {
     const [debugStateJson, setDebugStateJson] = useState<string>('');
     const [serviceUriJson, setServiceUriJson] = useState<string>('');
     const [fnPreview, setFnPreview] = useState<Array<{ name: string; sig: string }>>([]);
+    // Optional buyer info (shared with issuer only upon consent)
+    const [buyerName, setBuyerName] = useState<string>('');
+    const [buyerEmail, setBuyerEmail] = useState<string>('');
+    const [buyerConsent, setBuyerConsent] = useState<boolean>(false);
     // Feature flag: hide advanced buy/debug section for customers by default.
     // Re-enable via: add ?showBuy=1 to the URL, or set localStorage.setItem('ui:showBuy','1')
     const [showBuySection] = useState<boolean>(() => {
@@ -375,7 +435,14 @@ function WalletPage() {
     useEffect(() => { refresh(); }, []);
     useEffect(() => { if (msg) { success(msg); } }, [msg, success]);
     useEffect(() => { if (err) { error(err); } }, [err, error]);
-    function gen() { const s = generateSecretHex(); setSecret(s); setIssuedAt(Date.now()); }
+    function gen() {
+        const s = generateSecretHex();
+        // Start a brand‑new ticket: clear any previous issuance index so auto‑save
+        // does not update the last buyer entry while the user edits fields.
+        setIndex(undefined);
+        setSecret(s);
+        setIssuedAt(Date.now());
+    }
     // Client-side guard to prevent re-issuing the same leaf from this browser
     const [leafHex, setLeafHex] = useState<string>('');
     const [leafAlreadyIssued, setLeafAlreadyIssued] = useState<boolean>(false);
@@ -403,6 +470,7 @@ function WalletPage() {
             try { const r = await fetch('/api/payment-info'); const j = await r.json(); if (j.ok) { setIssuerAddr(j.issuerAddress); setPrice(String(j.priceTdust)); } } catch { }
         })();
     }, []);
+    // Buyer info is saved only via explicit user action (Save button) when consent is checked.
     // Attempt wallet detection (do not auto-connect; user must click Connect)
     useEffect(() => {
         (async () => {
@@ -437,13 +505,20 @@ function WalletPage() {
         if ((!useSecret || !useIssuedAt) && oneStep) {
             useSecret = generateSecretHex();
             useIssuedAt = Date.now();
+            // Clear previous index to avoid accidental auto-save updates
+            setIndex(undefined);
             setSecret(useSecret); setIssuedAt(useIssuedAt);
         }
-        if (!useSecret || !useIssuedAt) { setErr('Generate first'); return; }
+        if (!useSecret || !useIssuedAt) { setErr('Generate ticket first'); return; }
         if (leafAlreadyIssued) { setErr('Leaf already issued'); return; }
         try {
             const leaf = await sha256Hex(`${useSecret}:${useIssuedAt}`);
-            const res = await fetch('/api/issue-leaf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leaf }) });
+            const buyer = buyerConsent ? { name: buyerName, email: buyerEmail, consent: true } : undefined;
+            const res = await fetch('/api/issue-leaf', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(buyer ? { leaf, buyer } : { leaf })
+            });
             const ct = res.headers.get('content-type') || '';
             if (!ct.includes('application/json')) { const text = await res.text(); throw new Error(`Non-JSON response: ${text.slice(0, 100)}`); }
             const json = await res.json();
@@ -589,6 +664,21 @@ function WalletPage() {
                                 Generates a one‑time ticket code. Your purchase is recorded when you click “Buy Ticket”.
                             </div>
                         )}
+                        {/* Optional buyer info sharing */}
+                        <div className="card" style={{ marginTop: 12 }}>
+                            <div className="section-title">Optional contact info for issuer</div>
+                            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+                                If you consent, your name/email will be shared privately with the issuer only. This is not published on-chain or publicly visible.
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                                <input placeholder="Your name (optional)" value={buyerName} onChange={e => setBuyerName(e.target.value)} style={{ flex: '1 1 220px' }} />
+                                <input placeholder="Email (optional)" value={buyerEmail} onChange={e => setBuyerEmail(e.target.value)} style={{ flex: '1 1 220px' }} />
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                                    <input type="checkbox" checked={buyerConsent} onChange={e => setBuyerConsent(e.target.checked)} />
+                                    I agree to share this info with the issuer
+                                </label>
+                            </div>
+                        </div>
                         <div style={{ marginTop: 12 }}>
                             {/**
                              * Show generated details in Advanced mode even before issuance,
@@ -601,7 +691,7 @@ function WalletPage() {
                                 <div className="pill" style={{ marginTop: 6 }}>Leaf already issued</div>
                             )}
                             <div style={{ marginTop: 12 }}>
-                                {index != null ? (
+                                {(secret && issuedAt) ? (
                                     <TicketQr
                                         secret={secret}
                                         issuedAt={issuedAt}
@@ -611,7 +701,7 @@ function WalletPage() {
                                     />
                                 ) : (
                                     <div className="muted" style={{ fontSize: 12 }}>
-                                        {soldOut ? 'The Merkle tree is full (All tickets are sold!)' : 'QR will appear after your ticket is issued successfully.'}
+                                        {soldOut ? 'The Merkle tree is full (All tickets are sold!)' : 'Generate to view a QR of your secret; the full payload QR appears after issuance.'}
                                     </div>
                                 )}
                             </div>
@@ -693,7 +783,12 @@ function WalletPage() {
                                 if (!payResult) throw new Error('Payment did not return a txId');
                                 const newTxId = payResult.txId;
                                 const leaf = await sha256Hex(`${useSecret}:${useIssuedAt}`);
-                                const r = await fetch('/api/paid-issue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leaf, txId: newTxId }) });
+                                const buyer = buyerConsent ? { name: buyerName, email: buyerEmail, consent: true } : undefined;
+                                const r = await fetch('/api/paid-issue', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(buyer ? { leaf, txId: newTxId, buyer } : { leaf, txId: newTxId })
+                                });
                                 const j = await r.json();
                                 if (!j.ok) {
                                     const rr = j.reason || 'purchase failed';
@@ -715,10 +810,15 @@ function WalletPage() {
                     <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                         <input placeholder="txId" value={txId} onChange={e => setTxId(e.target.value)} style={{ flex: '1 1 320px' }} />
                         <button className="btn-primary" disabled={soldOut} onClick={async () => {
-                            if (!secret || !issuedAt) { setErr('Generate first'); return; }
+                            if (!secret || !issuedAt) { setErr('Generate ticket first'); return; }
                             try {
                                 const leaf = await sha256Hex(`${secret}:${issuedAt}`);
-                                const r = await fetch('/api/paid-issue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leaf, txId }) });
+                                const buyer = buyerConsent ? { name: buyerName, email: buyerEmail, consent: true } : undefined;
+                                const r = await fetch('/api/paid-issue', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(buyer ? { leaf, txId, buyer } : { leaf, txId })
+                                });
                                 const j = await r.json();
                                 if (!j.ok) {
                                     const rr = j.reason || 'paid issue failed';

@@ -33,6 +33,7 @@ try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch { /* ignore */ }
 const ONCHAIN_FILE = path.join(DATA_DIR, ".tickets.onchain.json");
 const ISSUER_FILE = path.join(DATA_DIR, ".issuer.tree.json"); // for realistic flow: issuer stores only leaves
 const PAYMENTS_FILE = path.join(DATA_DIR, ".payments.json"); // track used txIds to prevent reuse in demo
+const BUYERS_FILE = path.join(DATA_DIR, ".buyers.json"); // optional buyer info (name/email) by consent
 
 function readOnchain() {
     if (!fs.existsSync(ONCHAIN_FILE)) return { version: 1, root: "", maxAgeMs: 0, nullifiers: [], leafCount: 0, depth: 16 };
@@ -56,6 +57,26 @@ function readPayments(): { usedTxIds: string[] } {
 }
 function writePayments(obj: { usedTxIds: string[] }) {
     fs.writeFileSync(PAYMENTS_FILE, JSON.stringify(obj, null, 2));
+}
+
+type BuyerInfo = { name?: string; email?: string; consent?: boolean; leaf?: string; index?: number; savedAt?: number };
+function readBuyers(): { buyers: BuyerInfo[] } {
+    if (!fs.existsSync(BUYERS_FILE)) return { buyers: [] };
+    return JSON.parse(fs.readFileSync(BUYERS_FILE, "utf-8"));
+}
+function writeBuyers(obj: { buyers: BuyerInfo[] }) {
+    fs.writeFileSync(BUYERS_FILE, JSON.stringify(obj, null, 2));
+}
+function sanitizeBuyer(b: any): BuyerInfo | null {
+    if (!b || !b.consent) return null; // require explicit consent
+    const out: BuyerInfo = { consent: true };
+    const clamp = (s: string, max: number) => String(s || "").slice(0, max).trim();
+    if (b.name) out.name = clamp(b.name, 120);
+    if (b.email) out.email = clamp(b.email, 160);
+    // very light validation to prevent junk
+    if (out.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(out.email)) delete out.email;
+    if (!out.name && !out.email) return null; // nothing meaningful to store
+    return out;
 }
 
 // Hard-coded receiver address (requested)
@@ -91,6 +112,22 @@ let issuerAddress: string = HARDCODED_ISSUER_ADDRESS;
 
 app.get("/api/state", (_req: Request, res: Response) => {
     res.json(readOnchain());
+});
+
+// Buyers (issuer-only view; demo-level exposure)
+app.get("/api/buyers", (_req: Request, res: Response) => {
+    try {
+        res.setHeader('Cache-Control', 'no-store');
+        const list = readBuyers().buyers.map(b => ({
+            name: b.name || undefined,
+            email: b.email || undefined,
+            index: b.index,
+            savedAt: b.savedAt
+        }));
+        res.json({ ok: true, buyers: list });
+    } catch (e: any) {
+        res.status(500).json({ ok: false, reason: e?.message || 'failed' });
+    }
 });
 
 app.get("/api/tickets", (_req: Request, res: Response) => {
@@ -135,9 +172,14 @@ const doReset = (_req: Request, res: Response) => {
         const localPath = path.join(DATA_DIR, '.tickets.local.json');
         const onchainPath = path.join(DATA_DIR, '.tickets.onchain.json');
         const issuerPath = path.join(DATA_DIR, '.issuer.tree.json');
+        const buyersPath = path.join(DATA_DIR, '.buyers.json');
+        const paymentsPath = path.join(DATA_DIR, '.payments.json');
         if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
         if (fs.existsSync(onchainPath)) fs.unlinkSync(onchainPath);
         if (fs.existsSync(issuerPath)) fs.unlinkSync(issuerPath);
+        // Also clear optional stores so a fresh initialize truly resets the environment
+        if (fs.existsSync(buyersPath)) fs.unlinkSync(buyersPath);
+        if (fs.existsSync(paymentsPath)) fs.unlinkSync(paymentsPath);
     } catch { }
     res.json({ ok: true });
 };
@@ -226,7 +268,64 @@ app.post("/api/issue-leaf", (req: Request, res: Response) => {
     onchain.root = tree.getRoot();
     onchain.leafCount = leaves.length;
     writeOnchain(onchain);
-    res.json({ index: leaves.length - 1, onchain });
+    const index = leaves.length - 1;
+    // Optional buyer info
+    const buyerRaw = (req.body as any).buyer;
+    const buyer = sanitizeBuyer(buyerRaw);
+    if (buyer) {
+        try {
+            const buyers = readBuyers();
+            buyer.leaf = leaf;
+            buyer.index = index;
+            buyer.savedAt = Date.now();
+            buyers.buyers.push(buyer);
+            writeBuyers(buyers);
+        } catch { /* ignore persist errors */ }
+    }
+    res.json({ index, onchain });
+});
+
+// Upsert buyer info after issuance (by index or leaf)
+// This lets a buyer share their name/email even if they toggled consent after Generate/Buy.
+app.post("/api/buyer", (req: Request, res: Response) => {
+    try {
+        const issuer = readIssuerTree();
+        if (!issuer) return res.status(400).json({ ok: false, reason: "Not initialized" });
+        const { index: idxRaw, leaf: leafRaw, buyer: rawBuyer } = req.body as any;
+        let index: number | null = null;
+        let leaf: string | null = null;
+        if (typeof idxRaw === 'number' && Number.isFinite(idxRaw) && idxRaw >= 0 && idxRaw < issuer.leaves.length) {
+            index = Math.floor(idxRaw);
+            leaf = issuer.leaves[index] as any;
+        } else if (leafRaw) {
+            const i = issuer.leaves.indexOf(leafRaw);
+            if (i >= 0) { index = i; leaf = issuer.leaves[i] as any; }
+        }
+        if (index == null || leaf == null) return res.status(404).json({ ok: false, reason: "Ticket not found" });
+        const buyer = sanitizeBuyer(rawBuyer);
+        if (!buyer) return res.status(400).json({ ok: false, reason: "Missing consent or info" });
+        const store = readBuyers();
+        const existing = store.buyers.find(b => b.index === index) || null;
+        if (existing) {
+            existing.name = buyer.name;
+            existing.email = buyer.email;
+            existing.savedAt = Date.now();
+            existing.leaf = leaf;
+        } else {
+            store.buyers.push({
+                name: buyer.name,
+                email: buyer.email,
+                consent: true,
+                index: index,
+                leaf: leaf,
+                savedAt: Date.now()
+            });
+        }
+        writeBuyers(store);
+        res.json({ ok: true });
+    } catch (e: any) {
+        res.status(500).json({ ok: false, reason: e?.message || 'failed' });
+    }
 });
 
 // Hardened nullifier recording: require secret + issuedAt so we can validate membership
@@ -302,7 +401,21 @@ app.post("/api/paid-issue", (req: Request, res: Response) => {
     writeOnchain(onchain);
     payments.usedTxIds.push(txId);
     writePayments(payments);
-    res.json({ ok: true, index: leaves.length - 1, onchain });
+    const index = leaves.length - 1;
+    // Optional buyer info
+    const buyerRaw = (req.body as any).buyer;
+    const buyer = sanitizeBuyer(buyerRaw);
+    if (buyer) {
+        try {
+            const buyers = readBuyers();
+            buyer.leaf = leaf;
+            buyer.index = index;
+            buyer.savedAt = Date.now();
+            buyers.buyers.push(buyer);
+            writeBuyers(buyers);
+        } catch { /* ignore persist errors */ }
+    }
+    res.json({ ok: true, index, onchain });
 });
 
 // Friendly landing and health
