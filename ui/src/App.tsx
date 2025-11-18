@@ -147,7 +147,7 @@ function Landing() {
     return (
         <div className="container">
             <div className="hero">
-                <h1>Anonymous tickets on Midnight</h1>
+                <h1>Anonymous Tickets on Midnight</h1>
                 <p>Issue, purchase, and redeem single-use tickets using Merkle trees and nullifiers.</p>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
                     <Link to="/real/wallet"><button className="btn-primary">Get a Ticket</button></Link>
