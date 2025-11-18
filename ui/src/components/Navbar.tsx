@@ -6,7 +6,11 @@ export default function Navbar() {
     return (
         <div className="navbar">
             <div className="navbar-inner">
-                <div className="brand"><Link to="/real">Midnight Tickets</Link></div>
+                <div className="brand brand-image">
+                    <Link to="/real" aria-label="EventStack × Rare Network">
+                        <img src="/eventstack-rare.png" alt="EventStack × Rare Network" className="brand-logo" />
+                    </Link>
+                </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <div className="nav-links">
                         <Link className="nav-link" to="/real">Home</Link>

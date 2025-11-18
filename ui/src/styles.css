@@ -90,6 +90,18 @@ body {
     display: inline-block;
 }
 
+.brand-logo {
+    height: 50px;
+    width: auto;
+    display: block;
+}
+
+@media (max-width: 560px) {
+    .brand-logo {
+        height: 32px;
+    }
+}
+
 .toast {
     display: flex;
     align-items: center;
@@ -186,6 +198,17 @@ code {
     border-radius: 999px;
     background: conic-gradient(from 0deg, #8b5cf6, #22d3ee, #5b8cff, #8b5cf6);
     box-shadow: 0 0 24px rgba(91, 140, 255, 0.3);
+}
+
+/* Brand image variant: hide decorative dot and size the logo */
+.brand.brand-image::before {
+    display: none;
+}
+
+.brand-logo {
+    height: 40px;
+    width: auto;
+    display: block;
 }
 
 .nav-links {
