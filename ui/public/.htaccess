@@ -1,0 +1,12 @@
+# Serve built assets normally; fallback to index.html only when a file/dir does not exist
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  # If the requested resource exists as a real file or directory, serve it
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Otherwise, fallback to the SPA entry
+  RewriteRule . /index.html [L]
+</IfModule>
